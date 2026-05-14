@@ -1,8 +1,19 @@
 import os
+import json
 import threading
 from datetime import datetime
 import tkinter as tk
 from tkinter import messagebox, ttk
+
+# =========================
+# LOAD CONFIG
+# =========================
+def load_config():
+    with open("config.json", "r") as f:
+        return json.load(f)
+
+CONFIG = load_config()
+
 
 # =========================
 # FORMAT
@@ -18,12 +29,17 @@ def load_mysql_data(currency, start_sql, end_sql):
     import pandas as pd
     import mysql.connector
 
+    db = CONFIG["database"]
+
     conn = mysql.connector.connect(
-        host="gcs-ch.com",
-        user="root",
-        password="vaGcnV2i",
-        database="gcsplatform_new"
+        host=db["host"],
+        user=db["user"],
+        password=db["password"],
+        database=db["name"]
     )
+
+    brokers = CONFIG["filters"]["brokers"]
+    broker_list = ",".join([f"'{b}'" for b in brokers])
 
     query = f"""
     SELECT 
@@ -34,7 +50,7 @@ def load_mysql_data(currency, start_sql, end_sql):
         CURRENCY = '{currency}'
         AND TRADE_DATE >= '{start_sql}'
         AND TRADE_DATE <= '{end_sql}'
-        AND BROKER IN ('RMU','SWW','CDU','TSM','MCA','HAP','KDH','HSO','MTH')
+        AND BROKER IN ({broker_list})
         AND CONTRACT_NUMBER LIKE '%:b:%'
         AND deleted_by IS NULL
     ORDER BY TRADE_DATE;
@@ -99,21 +115,25 @@ def process_currency(currency, series, invert, start_dt, end_dt):
     start_sql = start_dt.strftime("%Y-%m-%d")
     end_sql = end_dt.strftime("%Y-%m-%d")
 
-    start_boe = start_dt.strftime("%d/%b/%Y")
-    end_boe = end_dt.strftime("%d/%b/%Y")
-
     update_status(f"Loading {currency} data...")
     df = load_mysql_data(currency, start_sql, end_sql)
 
-    update_status(f"Fetching {currency} FX...")
-    fx = load_fx_data(series, start_boe, end_boe, invert)
+    if currency == "GBP":
+        # No FX conversion needed — nominal is already in GBP
+        df["gbp"] = df["nominal"]
+    else:
+        start_boe = start_dt.strftime("%d/%b/%Y")
+        end_boe = end_dt.strftime("%d/%b/%Y")
 
-    update_status(f"Merging {currency}...")
-    merged = pd.merge(df, fx, on="trade_date_str", how="left")
-    merged["fx_rate"] = merged["fx_rate"].ffill()
-    merged["gbp"] = merged["nominal"] * merged["fx_rate"]
+        update_status(f"Fetching {currency} FX...")
+        fx = load_fx_data(series, start_boe, end_boe, invert)
 
-    total = merged["gbp"].sum()
+        update_status(f"Merging {currency}...")
+        df = pd.merge(df, fx, on="trade_date_str", how="left")
+        df["fx_rate"] = df["fx_rate"].ffill()
+        df["gbp"] = df["nominal"] * df["fx_rate"]
+
+    total = df["gbp"].sum()
 
     days = pd.bdate_range(start=start_dt, end=end_dt)
     avg = total / len(days)
@@ -134,6 +154,8 @@ def run_with_progress():
 
         usd = process_currency("USD", "XUDLUSS", False, start, end)
         eur = process_currency("EUR", "XUDLERS", False, start, end)
+        gbp = process_currency("GBP", "", False, start, end)
+
 
         update_status("Finalising...")
 
@@ -144,6 +166,10 @@ def run_with_progress():
             f"===== EUR =====\n"
             f"Total GBP: {format_gbp(eur[1])}\n"
             f"Average/day: {format_gbp(eur[2])}\n"
+            f"===== GBP =====\n"
+            f"Total GBP: {format_gbp(gbp[1])}\n"
+            f"Average/day: {format_gbp(gbp[2])}\n"
+
         )
 
         app.after(0, lambda: result_box.delete("1.0", tk.END))
@@ -182,7 +208,7 @@ app = tk.Tk()
 app.title("FX Daily Report Tool")
 app.geometry("500x450")
 
-# 🔥 Force instant render
+# Force instant render
 app.update()
 
 tk.Label(app, text="Start Date (YYYY-MM-DD)").pack()

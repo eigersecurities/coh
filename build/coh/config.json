@@ -1,0 +1,11 @@
+{
+  "database": {
+    "host": "gcs-ch.com",
+    "user": "root",
+    "password": "vaGcnV2i",
+    "name": "gcsplatform_new"
+  },
+  "filters": {
+    "brokers": ["RMU", "SWW", "CDU", "TSM", "MCA", "HAP", "KDH", "HSO", "MTH"]
+  }
+}
